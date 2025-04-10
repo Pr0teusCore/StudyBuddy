@@ -1,210 +1,235 @@
-#include <iostream>
-#include "WinSock2.h"
-#include "WS2tcpip.h"
-#include <string.h>
-using std::cout;
-using std::endl;
-using std::cin;
-using std::string;
-
-
-// Adam Loving and Carter Fitch
-
 #pragma comment(lib, "Ws2_32.lib")
 const int DEFAULT_BUFLEN = 512;
 
-//code provided
-int wait(SOCKET s, int seconds, int msec) {
-	// Parameter List:
-	// [IN] s        : SOCKET handle of connected socket.
-	// [IN] seconds : Number of seconds to wait for incoming traffic
-	// [IN] msec    : Number of milliseconds to wait
-	// Return value : 1 = Data is waiting in TCP/UDP buffer; 0 = Timeout or error detected
-	int    stat;                     // Status of waiting socket
-	struct timeval stTimeOut;        // Used to set timeout value
-	fd_set stReadFDS;                // "File Descriptor Set" for select() call
-	fd_set stXcptFDS;                // "File Descriptor Set" for exception handling
+#include <iostream>
+#include <string>
+#include <WinSock2.h>
+#include <ws2tcpip.h>
+#include "StudyBuddy.h"
 
-	// Set TimeOut value
-	stTimeOut.tv_sec = seconds;      // Number of seconds
-	stTimeOut.tv_usec = msec;        //   + msec milliseconds to wait
+#pragma comment(lib, "Ws2_32.lib")
 
-	FD_ZERO(&stReadFDS);             // Zero the set of "Read access" sockets
-	FD_ZERO(&stXcptFDS);             // Zero the set of "Exception" sockets
-	FD_SET(s, &stReadFDS);           // Add "s" to the set of "Read access" sockets
-	FD_SET(s, &stXcptFDS);           // Add "s" to the set of "Exception" sockets
+using namespace std;
 
-	// Check to see if Read access is enabled for socket "s"
-	stat = select(-1, &stReadFDS, NULL, &stXcptFDS, &stTimeOut);
-	if (stat == SOCKET_ERROR) {
-		std::cout << std::endl << "wait() function failed" << std::endl;
-		stat = 0;
-	}
-	else if (stat > 0) {
-		if (FD_ISSET(s, &stXcptFDS)) {   // Some error was detected or OOB data
-			stat = 0;
-		}
-		if (!FD_ISSET(s, &stReadFDS)) {  // No incoming data!? (check just in case)
-			stat = 0;
-		}
-	}
+void hostStudyGroup();
+void joinStudyGroup();
+string getUserInput(const string& prompt);
+void sendMessage(SOCKET s, const char* message, sockaddr_in dest);
+string receiveMessage(SOCKET s, sockaddr_in& sender, int timeoutSeconds = 2);
 
-	return stat;
+int main() {
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        cout << "WSAStartup failed." << endl;
+        return 1;
+    }
+
+    char choice;
+    do {
+        cout << "Would you like to (H)ost or (J)oin a study group? (Q to quit): ";
+        cin >> choice;
+        cin.ignore(numeric_limits<streamsize>::max(), '\n'); // Clear input buffer
+
+        switch (toupper(choice)) {
+        case 'H':
+            hostStudyGroup();
+            break;
+        case 'J':
+            joinStudyGroup();
+            break;
+        case 'Q':
+            cout << "Quitting program." << endl;
+            break;
+        default:
+            cout << "Invalid choice. Please enter H, J, or Q." << endl;
+        }
+    } while (toupper(choice) != 'Q');
+
+    WSACleanup();
+    return 0;
 }
 
+void hostStudyGroup() {
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET) {
+        cout << "Socket creation failed." << endl;
+        return;
+    }
 
-int main(int argc, char* argv[]) {
+    sockaddr_in serverAddr{};
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(DEFAULT_PORT);
+    serverAddr.sin_addr.S_un.S_addr = INADDR_ANY;
 
-	//init winsock
-	WSADATA wsaData;
+    if (bind(s, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        cout << "Bind failed." << endl;
+        closesocket(s);
+        return;
+    }
 
-	int iResult;
+    string groupName = getUserInput("Enter the name of the study group: ");
+    string hostName = getUserInput("Enter your name (optional, press Enter to skip): ");
+    string location = getUserInput("Enter the location of the study group: ");
+    string courses = getUserInput("Enter the courses (PREFIX XXXX, newline separated): ");
+    string members = hostName.empty() ? "" : hostName + "\n";
 
-	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-	if (iResult != 0) {
-		cout << "WSAStartup failed: " << iResult << endl;
-		return 1;
-	}
-	// ask user whether they want to create a group or join one
-	cout << "Would you like to create a group or join one? (create/join): ";
-	string choice;
-	cin >> choice;
-	if (choice == "create") {
-		//ask user for group name
-		cout << "Enter a group name: ";
-		string groupName;
-		cin >> groupName;
-		//ask user for location of study group
-		cout << "Enter the location of the study group: ";
-		string location;
-		cin >> location;
-		//ask user for courses that will be studied in the group
-		cout << "Enter the courses that will be studied in the group: ";
-		string courses;
-		cin >> courses;
+    cout << "Hosting study group: " << groupName << " at " << location << " for " << courses << endl;
+    cout << "Waiting for queries..." << endl;
 
-	}
-	else if (choice == "join") {
-		// join a group
-		cout << "Joining a group..." << endl;
-	}
-	else {
-		cout << "Invalid choice. Please enter 'create' or 'join'." << endl;
-	}
-	//create socket
+    char recvBuf[DEFAULT_BUFLEN];
+    while (true) {
+        sockaddr_in sender{};
+        int senderLen = sizeof(sender);
+        int len = recvfrom(s, recvBuf, DEFAULT_BUFLEN, 0, (sockaddr*)&sender, &senderLen);
+        if (len > 0) {
+            recvBuf[len] = '\0';
+            cout << "Received: " << recvBuf << endl;
 
-	struct addrinfo* result = NULL;
-	struct addrinfo hints;
+            if (strcmp(recvBuf, Study_QUERY) == 0) {
+                string response = string(Study_NAME) + groupName;
+                sendMessage(s, response.c_str(), sender);
+                cout << "Sent: " << response << endl;
+            }
+            else if (strcmp(recvBuf, Study_WHERE) == 0) {
+                string response = string(Study_LOC) + location;
+                sendMessage(s, response.c_str(), sender);
+                cout << "Sent: " << response << endl;
+            }
+            else if (strcmp(recvBuf, Study_WHAT) == 0) {
+                string response = string(Study_COURSES) + courses;
+                sendMessage(s, response.c_str(), sender);
+                cout << "Sent: " << response << endl;
+            }
+            else if (strcmp(recvBuf, Study_MEMBERS) == 0) {
+                string response = string(Study_MEMLIST) + members;
+                sendMessage(s, response.c_str(), sender);
+                cout << "Sent: " << response << endl;
+            }
+            else if (strncmp(recvBuf, Study_JOIN, strlen(Study_JOIN)) == 0) {
+                string newMember = string(recvBuf).substr(strlen(Study_JOIN));
+                if (!newMember.empty()) {
+                    members += newMember + "\n";
+                    sendMessage(s, Study_CONFIRM, sender);
+                    cout << "Sent: " << Study_CONFIRM << " and added " << newMember << " to members." << endl;
+                }
+            }
+        }
+    }
 
-	ZeroMemory(&hints, sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_protocol = IPPROTO_UDP;
+    closesocket(s);
+}
 
+void joinStudyGroup() {
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET) {
+        cout << "Socket creation failed." << endl;
+        return;
+    }
 
-	const char* Hostname;
-	const char* Port;
+    BOOL bOptVal = TRUE;
+    setsockopt(s, SOL_SOCKET, SO_BROADCAST, (char*)&bOptVal, sizeof(BOOL));
 
-	if (argc == 1) {
-		Hostname = (char*)"PE-HRFIELDS-1";
-		Port = (char*)"17";
+    string clientName = getUserInput("Enter your name: ");
+    ServerStruct servers[MAX_SERVERS];
+    int numServers = getServers(s, servers);
 
+    if (numServers == 0) {
+        cout << "No study groups found." << endl;
+        closesocket(s);
+        return;
+    }
 
-	}
-	else if (argc == 2) {
-		Hostname = argv[1];
-		Port = (char*)"17";
-	}
-	else {
-		Hostname = argv[1];
-		Port = argv[2];
+    cout << "Available study groups:" << endl;
+    for (int i = 0; i < numServers; i++) {
+        cout << i + 1 << ". " << servers[i].name << endl;
+    }
 
-	}
+    char choice;
+    do {
+        cout << "Choose an action:\n1. Ask location\n2. Ask courses\n3. Ask members\n4. Join group\n5. Exit\nChoice: ";
+        cin >> choice;
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
 
-	iResult = getaddrinfo(Hostname, Port, &hints, &result);
+        if (choice >= '1' && choice <= '5') {
+            int serverIndex;
+            if (choice != '5') {
+                cout << "Select a study group (1-" << numServers << "): ";
+                cin >> serverIndex;
+                cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                serverIndex--; // Convert to 0-based
+                if (serverIndex < 0 || serverIndex >= numServers) {
+                    cout << "Invalid selection." << endl;
+                    continue;
+                }
+            }
 
+            sockaddr_in serverAddr = servers[serverIndex].addr;
+            string response;
 
-	if (iResult != 0) {
-		cout << "getaddrinfo failed: " << iResult << endl;
-		WSACleanup();
-		return 1;
-	}
+            switch (choice) {
+            case '1': // Ask location
+                sendMessage(s, Study_WHERE, serverAddr);
+                response = receiveMessage(s, serverAddr);
+                if (!response.empty() && strncmp(response.c_str(), Study_LOC, strlen(Study_LOC)) == 0) {
+                    cout << "Location: " << response.substr(strlen(Study_LOC)) << endl;
+                }
+                break;
+            case '2': // Ask courses
+                sendMessage(s, Study_WHAT, serverAddr);
+                response = receiveMessage(s, serverAddr);
+                if (!response.empty() && strncmp(response.c_str(), Study_COURSES, strlen(Study_COURSES)) == 0) {
+                    cout << "Courses: " << response.substr(strlen(Study_COURSES)) << endl;
+                }
+                break;
+            case '3': // Ask members
+                sendMessage(s, Study_MEMBERS, serverAddr);
+                response = receiveMessage(s, serverAddr);
+                if (!response.empty() && strncmp(response.c_str(), Study_MEMLIST, strlen(Study_MEMLIST)) == 0) {
+                    cout << "Members: " << response.substr(strlen(Study_MEMLIST)) << endl;
+                }
+                break;
+            case '4': // Join group
+                string joinMsg = string(Study_JOIN) + clientName;
+                sendMessage(s, joinMsg.c_str(), serverAddr);
+                response = receiveMessage(s, serverAddr);
+                if (response == Study_CONFIRM) {
+                    cout << "Successfully joined the study group!" << endl;
+                    closesocket(s);
+                    return; // Exit after joining
+                }
+                break;
+            case '5': // Exit
+                break;
+            }
+        }
+        else {
+            cout << "Invalid choice. Please enter 1-5." << endl;
+        }
+    } while (choice != '5');
 
-	SOCKET Socket = INVALID_SOCKET;
-	Socket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-	if (Socket == INVALID_SOCKET) {
-		cout << "Error at socket(): " << WSAGetLastError() << endl;
-		freeaddrinfo(result);
-		WSACleanup();
-		return 1;
-	}
+    closesocket(s);
+}
 
+string getUserInput(const string& prompt) {
+    string input;
+    cout << prompt;
+    getline(cin, input);
+    return input;
+}
 
+void sendMessage(SOCKET s, const char* message, sockaddr_in dest) {
+    sendto(s, message, strlen(message) + 1, 0, (sockaddr*)&dest, sizeof(dest));
+    cout << "Sent: " << message << endl;
+}
 
-
-	if (Socket == INVALID_SOCKET) {
-		cout << "Unable to connect to server" << endl;
-		WSACleanup();
-		return 1;
-	}
-
-	//connection has been established
-
-	char sendbuf[DEFAULT_BUFLEN];
-	char recvbuf[DEFAULT_BUFLEN];
-	int recvbuflen = DEFAULT_BUFLEN;
-
-
-	cout << "Enter command:";
-	cin >> sendbuf;
-	SOCKADDR_IN SenderAddr;
-
-	//Source:
-	//https://members.tripod.com/frenchwhales_site/winsockt/Lesson4.htm
-
-	struct sockaddr_in* ipAddress = (struct sockaddr_in*)result->ai_addr;
-
-	struct sockaddr_in destAddr;
-	destAddr.sin_family = AF_INET;
-	destAddr.sin_addr.s_addr = ipAddress->sin_addr.s_addr;
-	destAddr.sin_port = htons(17);
-
-
-	int hostAddrSize = sizeof(destAddr);
-
-	int SenderAddrSize = sizeof(SenderAddr);
-
-	while (_stricmp(sendbuf, "quit")) {
-
-		sendto(Socket, sendbuf, DEFAULT_BUFLEN, 0, (const sockaddr*)&destAddr, hostAddrSize);
-
-		if (_strcmpi(sendbuf, "sendqotd") == 0) {
-			while (wait(Socket, 1, 1000) == 1) {
-				recvfrom(Socket, recvbuf, DEFAULT_BUFLEN, 0, (struct sockaddr*)&SenderAddr, &SenderAddrSize);
-				cout << recvbuf;
-			}
-		}
-
-
-		cout << "Enter command:";
-		cin >> sendbuf;
-	}
-
-
-	//disconnect
-	iResult = shutdown(Socket, SD_SEND);
-	if (iResult == SOCKET_ERROR) {
-		cout << "shutdown failed: " << WSAGetLastError() << endl;
-		closesocket(Socket);
-		WSACleanup();
-		return 1;
-	}
-
-	closesocket(Socket);
-	WSACleanup();
-
-	return 0;
-
-
-
+string receiveMessage(SOCKET s, sockaddr_in& sender, int timeoutSeconds) {
+    char buf[DEFAULT_BUFLEN];
+    int senderLen = sizeof(sender);
+    int len = recvfrom(s, buf, DEFAULT_BUFLEN, 0, (sockaddr*)&sender, &senderLen);
+    if (len > 0) {
+        buf[len] = '\0';
+        cout << "Received: " << buf << endl;
+        return string(buf);
+    }
+    return "";
 }
